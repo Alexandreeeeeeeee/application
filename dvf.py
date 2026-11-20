@@ -1,10 +1,26 @@
-from pathlib import Path
-import requests
-import pandas as pd
-import geopandas as gpd
+"""
+Ce module permet de manipuler les chemins du système.
+"""
 import os
+from pathlib import Path
+
 import duckdb
+import geopandas as gpd
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import requests
 import seaborn as sns
+from lightgbm import LGBMRegressor
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
+from sklearn.metrics import root_mean_squared_error
+from sklearn.base import clone
+from skore import EstimatorReport
+
 
 os.chdir('/home/onyxia/work/application')
 
@@ -15,20 +31,33 @@ departements_paris = ["75", "92", "93", "94"]
 
 SOURCES = {
     "dvf.parquet":
-        "https://minio.lab.sspcloud.fr/projet-formation/nouvelles-sources/data/geoparquet/dvf.parquet",
+        ("https://minio.lab.sspcloud.fr/projet-formation/nouvelles"
+        "-sources/data/geoparquet/dvf.parquet"),
     "filosofi_carreaux_200m_2021.parquet":
         "https://www.data.gouv.fr/api/1/datasets/r/55432374-a91d-43d0-923d-4514dc3eb951",
 }
 
-def download_sources(url, cible):
-    r = requests.get(url, timeout=120)
+def download_sources(url_ds, cible_ds):
+    """Téléchargement des sources
+
+    Pour télécharger des données.
+
+    Parameters
+    ----------
+    url_ds : str
+        L'URL
+
+    cible_ds : str
+        La cible, à étayer
+    """
+    r = requests.get(url_ds, timeout=120)
     r.raise_for_status()
-    with open(cible, "wb") as f:
+    with open(cible_ds, "wb") as f:
         f.write(r.content)
 
 
 
-jetonapi = "1SuperJetonUltraConfidentiel!!!"
+JETONAPI = "1SuperJetonUltraConfidentiel!!!"
 
 
 data_location = Path("data")
@@ -107,12 +136,16 @@ filo_cols = [
 filo = gpd.read_parquet(data_location / "filosofi_carreaux_200m_2021.parquet", columns=filo_cols)
 filo = filo.rename(
     columns = {
-        "men": "nbre_menages", "men_pauv": "nbre_menages_pauvres", "men_prop": "nbre_menages_prop", "ind_snv": "somme_nv_vie",
-        "log_soc": "nbre_logements_sociaux", "log_av45": "nbre_logements_avant_1945", "men_surf": "surface_totale_logements"
+        "men": "nbre_menages", "men_pauv": "nbre_menages_pauvres",
+        "men_prop": "nbre_menages_prop", "ind_snv": "somme_nv_vie",
+        "log_soc": "nbre_logements_sociaux",
+        "log_av45": "nbre_logements_avant_1945",
+        "men_surf": "surface_totale_logements"
     }
 )
 
-print(f"Reprojection de {dvf.shape[0]} de transactions immobilières du CRS {dvf.crs.to_epsg()} à {filo.crs.to_epsg()}")
+print(f"Reprojection de {dvf.shape[0]} de transactions immobilières du CRS"
+    "{dvf.crs.to_epsg()} à {filo.crs.to_epsg()}")
 
 dvf = dvf.to_crs(filo.crs)
 dvf = dvf.sjoin(filo, how="left", predicate="within")
@@ -147,7 +180,7 @@ params = {
   "maxResult": 40000,
 }
 
-headers = {"Authorization": f"Bearer {jetonapi}"}
+headers = {"Authorization": f"Bearer {JETONAPI}"}
 
 response = requests.get(url, params=params, headers=headers, timeout=60)
 response.raise_for_status()
@@ -179,7 +212,7 @@ params = {
   "maxResult": 40000,
 }
 
-headers = {"Authorization": f"Bearer {jetonapi}"}
+headers = {"Authorization": f"Bearer {JETONAPI}"}
 
 response = requests.get(url, params=params, headers=headers, timeout=60)
 response.raise_for_status()
@@ -196,8 +229,15 @@ taux_pauvrete = pd.DataFrame(
 
 # Merge aux données initiales
 
-dvf = dvf.merge(niveau_vie, left_on="code_commune", right_on="CODGEO", how="left").drop(columns="CODGEO")
-dvf = dvf.merge(taux_pauvrete, left_on="code_commune", right_on="CODGEO", how="left").drop(columns="CODGEO")
+dvf = dvf.merge(
+    niveau_vie, left_on="code_commune",
+    right_on="CODGEO",
+    how="left").drop(columns="CODGEO")
+dvf = dvf.merge(
+    taux_pauvrete,
+    left_on="code_commune",
+    right_on="CODGEO",
+    how="left").drop(columns="CODGEO")
 
 print(
     dvf.head(5)
@@ -216,8 +256,6 @@ grid.set(xscale="log", yscale="log")
 
 
 print("Feature engineering")
-
-import numpy as np
 
 dvf['tx_pauvrete'] = dvf['nbre_menages_pauvres']/dvf['nbre_menages']
 dvf['nv_vie_moyen'] = dvf['somme_nv_vie']/dvf['nbre_menages']
@@ -269,7 +307,8 @@ numeric_features = [
     "log_surface", "log_distance_eiffel", "nombre_pieces_principales",
     "nombre_lots", "log_surface_terrain", "ratio_carrez",
     "nbre_menages", "tx_pauvrete", "nv_vie_moyen",
-    "part_proprietaires", "part_logements_sociaux", "part_logements_avant_1945", "surface_moyenne_logements",
+    "part_proprietaires", "part_logements_sociaux",
+    "part_logements_avant_1945", "surface_moyenne_logements",
     "NIVVIE_MEDIAN", "TAUX_PAUVRETE"
 ]
 categorical_features = ["code_commune", "type_local"]
@@ -292,13 +331,6 @@ print(prix_m2_commune.tail(5))
 
 
 ## Encoder les données imputées ou transformées.
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder, FunctionTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
-from lightgbm import LGBMRegressor
-
 
 def as_category(df):
     """Convertit les colonnes en dtype 'category' pour que LightGBM les
@@ -350,20 +382,22 @@ X = dvf_start_data[features]
 y = dvf_start_data["prix_m2"]
 #weights = dvf_start_data["code_commune"] + "_" + dvf_start_data["annee"].astype(str)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=0)# stratify = weights)
+X_TRAIN, X_TEST, y_train, y_test = train_test_split(
+    X, y, test_size=0.1,
+    random_state=0)# stratify = weights)
 
-pd.concat([X_train, y_train], axis=1).to_csv("train.csv")
-pd.concat([X_test, y_test], axis=1).to_csv("test.csv")
+pd.concat([X_TRAIN, y_train], axis=1).to_csv("train.csv")
+pd.concat([X_TEST, y_test], axis=1).to_csv("test.csv")
 
 # check que toutes les modalités du test sont connues du modèle
-if set(X_test["code_commune"].dropna().unique()) - set(X_train["code_commune"].dropna().unique()):
+if set(X_TEST["code_commune"].dropna().unique()) - set(X_TRAIN["code_commune"].dropna().unique()):
     message = "Modalités de code_commune absentes de l'apprentissage"
 else:
     message = "Toutes les modalités de code_commune du test sont connues du modèle"
 
 print(message)
 
-if set(X_test["type_local"].dropna().unique()) - set(X_train["type_local"].dropna().unique()):
+if set(X_TEST["type_local"].dropna().unique()) - set(X_TRAIN["type_local"].dropna().unique()):
     message = "Modalités de type_local absentes de l'apprentissage"
 else:
     message = "Toutes les modalités de code_commune du test sont connues du modèle"
@@ -373,21 +407,20 @@ print(message)
 
 # Entraînement du modèle -------------------------------
 
-pipe.fit(X_train, y_train)
+pipe.fit(X_TRAIN, y_train)
 
 
 # RMSE du modèle
-from sklearn.metrics import root_mean_squared_error
 
-rmse_train = root_mean_squared_error(y_train, pipe.predict(X_train))
-rmse_test = root_mean_squared_error(y_test, pipe.predict(X_test))
+rmse_train = root_mean_squared_error(y_train, pipe.predict(X_TRAIN))
+rmse_test = root_mean_squared_error(y_test, pipe.predict(X_TEST))
 print(f"RMSE sur l'apprentissage : {rmse_train:,.0f} €/m²")
 print(f"RMSE sur le test : {rmse_test:,.0f} €/m²")
 
 # RMSE par commune (top et bottom 5)
-residuals = X_test[["code_commune"]].copy()
+residuals = X_TEST[["code_commune"]].copy()
 residuals["y_test"] = y_test
-residuals["pred"] = pipe.predict(X_test)
+residuals["pred"] = pipe.predict(X_TEST)
 
 rmse_commune = (
     residuals.groupby("code_commune")
@@ -407,18 +440,15 @@ print(rmse_commune.tail(5))
 
 
 # Évaluation de la qualité du modèle avec skore ---------------------
-import matplotlib.pyplot as plt
-from sklearn.base import clone
-from skore import EstimatorReport, CrossValidationReport
 
 print("Évaluation skore ---------------------")
 
 # Rapport sur le modèle (skore réentraîne une copie du pipeline sur le même découpage)
 report = EstimatorReport(
     clone(pipe),
-    X_train=X_train,
+    X_train=X_TRAIN,
     y_train=y_train,
-    X_test=X_test,
+    X_test=X_TEST,
     y_test=y_test,
 )
 
