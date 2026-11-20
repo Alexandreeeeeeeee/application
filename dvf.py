@@ -4,6 +4,8 @@ Ce module permet de manipuler les chemins du système.
 import os
 from pathlib import Path
 
+import argparse
+from dotenv import load_dotenv
 import duckdb
 import geopandas as gpd
 import numpy as np
@@ -21,6 +23,7 @@ from sklearn.metrics import root_mean_squared_error
 from sklearn.base import clone
 from skore import EstimatorReport
 
+load_dotenv()
 
 os.chdir('/home/onyxia/work/application')
 
@@ -56,9 +59,7 @@ def download_sources(url_ds, cible_ds):
         f.write(r.content)
 
 
-
-JETONAPI = "1SuperJetonUltraConfidentiel!!!"
-
+jeton_api = os.environ["JETON_API"]
 
 data_location = Path("data")
 data_location.mkdir(exist_ok=True)
@@ -180,7 +181,7 @@ params = {
   "maxResult": 40000,
 }
 
-headers = {"Authorization": f"Bearer {JETONAPI}"}
+headers = {"Authorization": f"Bearer {jeton_api}"}
 
 response = requests.get(url, params=params, headers=headers, timeout=60)
 response.raise_for_status()
@@ -212,7 +213,7 @@ params = {
   "maxResult": 40000,
 }
 
-headers = {"Authorization": f"Bearer {JETONAPI}"}
+headers = {"Authorization": f"Bearer {jeton_api}"}
 
 response = requests.get(url, params=params, headers=headers, timeout=60)
 response.raise_for_status()
@@ -355,10 +356,17 @@ preprocessor = ColumnTransformer(
     ]
 ).set_output(transform="pandas")
 
+parser = argparse.ArgumentParser(description="Combien d'arbres ?")
+parser.add_argument(
+    "--n_trees", type=int, default=1500, help="Un nombre d'arbres"
+)
+args = parser.parse_args()
+n_trees = args.n_trees
+
 _pipe = Pipeline([
     ("preprocessor", preprocessor),
     ("regressor", LGBMRegressor(
-        n_estimators=1500,
+        n_estimators=n_trees,
         learning_rate=0.03,
         num_leaves=31,
         min_child_samples=10,
